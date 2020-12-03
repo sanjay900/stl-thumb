@@ -43,7 +43,7 @@ fn print_context_info(display: &glium::backend::Context)
 }
 
 
-fn create_normal_display(config: &Config) -> Result<(glium::Display, glutin::EventsLoop), Box<Error>> {
+fn create_normal_display(config: &Config) -> Result<(glium::Display, glutin::EventsLoop), Box<dyn Error>> {
     let events_loop = glutin::EventsLoop::new();
     let window_dim = glutin::dpi::LogicalSize::new(
         config.width.into(),
@@ -64,23 +64,14 @@ fn create_normal_display(config: &Config) -> Result<(glium::Display, glutin::Eve
 }
 
 
-fn create_headless_display(config: &Config) -> Result<glium::HeadlessRenderer, Box<std::any::Any>> {
-    let prev_hook = panic::take_hook();
-    panic::set_hook(Box::new(|_| {}));
-    let result: std::result::Result<std::result::Result<glium::HeadlessRenderer, Box<Error>>, std::boxed::Box<dyn std::any::Any + std::marker::Send>> = panic::catch_unwind(|| {
-        let context = glutin::HeadlessRendererBuilder::new(config.width, config.height)
-            .with_gl(glutin::GlRequest::Latest)
-            //.with_depth_buffer(24)
-            .build()?;
-        let display = glium::HeadlessRenderer::new(context)?;
-        print_context_info(&display);
-        Ok(display)
-    });
-    panic::set_hook(prev_hook);
-    match result {
-        Ok(r) => Ok(r.unwrap()),
-        Err(e) => Err(e) 
-    }
+fn create_headless_display(config: &Config) -> Result<glium::HeadlessRenderer, Box<dyn Error>> {
+    let context = glutin::HeadlessRendererBuilder::new(config.width, config.height)
+        .with_gl(glutin::GlRequest::Latest)
+        //.with_depth_buffer(24)
+        .build()?;
+    let display = glium::HeadlessRenderer::new(context)?;
+    print_context_info(&display);
+    Ok(display)
 }
 
 
@@ -191,7 +182,7 @@ fn render_pipeline<F>(display: &F,
     let img = image::ImageBuffer::from_raw(config.width, config.height, pixels.data.into_owned()).unwrap();
     let img = image::DynamicImage::ImageRgba8(img).flipv();
     // Write to stdout if user did not specify a file
-    let mut output: Box<io::Write> = match config.img_filename {
+    let mut output: Box<dyn io::Write> = match config.img_filename {
         Some(ref x) => {
             Box::new(std::fs::File::create(&x).unwrap())
         },
@@ -248,7 +239,7 @@ fn show_window(display: glium::Display,
 }
 
 
-pub fn run(config: &Config) -> Result<(), Box<Error>> {
+pub fn run(config: &Config) -> Result<(), Box<dyn Error>> {
     // Get geometry from STL file
     // =========================
 
