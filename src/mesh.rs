@@ -1,9 +1,12 @@
 extern crate cgmath;
 extern crate stl_io;
+extern crate tobj;
 
 use std::error::Error;
-use std::fs::File;
 use std::fmt;
+use std::fs::File;
+use std::path::Path;
+use std::convert::TryInto;
 
 #[derive(Copy, Clone)]
 pub struct Vertex {
@@ -85,16 +88,63 @@ impl fmt::Display for BoundingBox {
     }
 }
 
-
 pub struct Mesh {
     pub vertices: Vec<Vertex>,
     pub normals: Vec<Normal>,
     pub indices: Vec<usize>,
     pub bounds: BoundingBox,
     stl_had_normals: bool,
+    obj: bool,
 }
 
 impl Mesh {
+    pub fn from_obj(obj_file: &String) -> Result<Mesh, Box<Error>> {
+        //let stl = stl_io::read_stl(&mut stl_file)?;
+        //debug!("{:?}", stl);
+
+        // Get starting point for finding bounding box
+
+        let mut mesh = Mesh {
+            vertices: Vec::new(),
+            normals: Vec::new(),
+            indices: Vec::new(),
+            bounds: BoundingBox::new(&[f32::INFINITY; 3]),
+            stl_had_normals: true,
+            obj: true,
+        };
+        match tobj::load_obj(Path::new(&obj_file), true) {
+            Ok((models, _)) => {
+                for model in &models {
+                    let model_mesh = &model.mesh;
+                    mesh.bounds = BoundingBox::new(&model_mesh.positions[0..3].try_into()?);
+                    for face in (0..model_mesh.num_face_indices.len()*3).step_by(3) {
+                        let mut vertices: [[f32; 3]; 3] = [[0.0; 3]; 3];
+                        let mut normal: [f32; 3] = [0.0; 3];
+                        let mut coord = 0;
+                        for idx in model_mesh.indices[face..face+3].iter() {
+                            let i = 3 * (*idx as usize);
+                            if model_mesh.normals.len() > 0 {
+                                normal = model_mesh.normals[i..i+3].try_into()?;
+                            }
+                            vertices[coord] = model_mesh.positions[i..i+3].try_into()?;
+                            coord+=1;
+                        }
+                        let tri = stl_io::Triangle{vertices, normal} ;
+                        mesh.process_tri(&tri);
+                    }
+                }
+            }
+            Err(e) => panic!("Loading of {:?} failed due to {:?}", obj_file, e),
+        }
+        if !mesh.stl_had_normals {
+            warn!("OBJ file missing surface normals");
+        }
+        info!("Bounds:");
+        info!("{}", mesh.bounds);
+        info!("Center:\t{:?}", mesh.bounds.center());
+
+        Ok(mesh)
+    }
     pub fn from_stl(mut stl_file: File) -> Result<Mesh, Box<Error>> {
         //let stl = stl_io::read_stl(&mut stl_file)?;
         //debug!("{:?}", stl);
@@ -110,6 +160,7 @@ impl Mesh {
             indices: Vec::new(),
             bounds: BoundingBox::new(&v1),
             stl_had_normals: true,
+            obj: false,
         };
 
         let mut face_count = 0;
@@ -126,7 +177,7 @@ impl Mesh {
             warn!("STL file missing surface normals");
         }
         info!("Bounds:");
-        info!("{}",mesh.bounds);
+        info!("{}", mesh.bounds);
         info!("Center:\t{:?}", mesh.bounds.center());
         info!("Triangles processed:\t{}\n", face_count);
 
@@ -136,9 +187,7 @@ impl Mesh {
     fn process_tri(&mut self, tri: &stl_io::Triangle) {
         for v in tri.vertices.iter() {
             self.bounds.expand(&v);
-            self.vertices.push( Vertex {
-                position: *v,
-            });
+            self.vertices.push(Vertex { position: *v });
             //debug!("{:?}", v);
         }
         // Use normal from STL file if it is provided, otherwise calculate it ourselves
@@ -152,9 +201,7 @@ impl Mesh {
         //debug!("{:?}",tri.normal);
         // TODO: Figure out how to get away with 1 normal instead of 3
         for _ in 0..3 {
-            self.normals.push( Normal{
-                normal: n,
-            });
+            self.normals.push(Normal { normal: n });
         }
     }
 
@@ -164,20 +211,21 @@ impl Mesh {
     pub fn scale_and_center(&self) -> cgmath::Matrix4<f32> {
         // Move center to origin
         let center = self.bounds.center();
-        let translation_vector = cgmath::Vector3::new(
-            -center.x,
-            -center.y,
-            -center.z,
-        );
+        let translation_vector = cgmath::Vector3::new(-center.x, -center.y, -center.z);
         let translation_matrix = cgmath::Matrix4::from_translation(translation_vector);
         // Scale
-        let longest = self.bounds.length()
+        let longest = self
+            .bounds
+            .length()
             .max(self.bounds.width())
             .max(self.bounds.height());
         let scale = 2.0 / longest;
-        info!("Scale:\t{}",scale);
+        info!("Scale:\t{}", scale);
         let scale_matrix = cgmath::Matrix4::from_scale(scale);
-        let matrix = scale_matrix * translation_matrix;
+        let mut matrix = scale_matrix * translation_matrix;
+        if self.obj {
+            matrix = matrix * cgmath::Matrix4::from_angle_x(cgmath::Rad(3.14/2.0));
+        }
         matrix
     }
 }
@@ -205,9 +253,5 @@ fn normal(tri: &stl_io::Triangle) -> stl_io::Normal {
     let w = p3 - p1;
     let n = v.cross(w);
     let mag = n.x.abs() + n.y.abs() + n.z.abs();
-    [
-        n.x / mag,
-        n.y / mag,
-        n.z / mag,
-    ]
+    [n.x / mag, n.y / mag, n.z / mag]
 }

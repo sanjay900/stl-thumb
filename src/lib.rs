@@ -8,7 +8,7 @@ extern crate mint;
 
 pub mod config;
 mod mesh;
-
+use std::panic;
 use std::error::Error;
 use std::fs::File;
 use std::{io, thread, time};
@@ -64,14 +64,23 @@ fn create_normal_display(config: &Config) -> Result<(glium::Display, glutin::Eve
 }
 
 
-fn create_headless_display(config: &Config) -> Result<glium::HeadlessRenderer, Box<Error>> {
-    let context = glutin::HeadlessRendererBuilder::new(config.width, config.height)
-        .with_gl(glutin::GlRequest::Latest)
-        //.with_depth_buffer(24)
-        .build()?;
-    let display = glium::HeadlessRenderer::new(context)?;
-    print_context_info(&display);
-    Ok(display)
+fn create_headless_display(config: &Config) -> Result<glium::HeadlessRenderer, Box<std::any::Any>> {
+    let prev_hook = panic::take_hook();
+    panic::set_hook(Box::new(|_| {}));
+    let result: std::result::Result<std::result::Result<glium::HeadlessRenderer, Box<Error>>, std::boxed::Box<dyn std::any::Any + std::marker::Send>> = panic::catch_unwind(|| {
+        let context = glutin::HeadlessRendererBuilder::new(config.width, config.height)
+            .with_gl(glutin::GlRequest::Latest)
+            //.with_depth_buffer(24)
+            .build()?;
+        let display = glium::HeadlessRenderer::new(context)?;
+        print_context_info(&display);
+        Ok(display)
+    });
+    panic::set_hook(prev_hook);
+    match result {
+        Ok(r) => Ok(r.unwrap()),
+        Err(e) => Err(e) 
+    }
 }
 
 
@@ -125,6 +134,7 @@ fn render_pipeline<F>(display: &F,
 
     // Transformation matrix (positions, scales and rotates model)
     let transform_matrix = mesh.scale_and_center();
+
 
     // View matrix (convert to positions relative to camera)
     //let view_matrix = cgmath::Matrix4::look_at(CAM_POSITION, cgmath::Point3::origin(), cgmath::Vector3::unit_z());
@@ -244,8 +254,14 @@ pub fn run(config: &Config) -> Result<(), Box<Error>> {
 
     // TODO: Add support for URIs instead of plain file names
     // https://developer.gnome.org/integration-guide/stable/thumbnailer.html.en
-    let stl_file = File::open(&config.stl_filename)?;
-    let mesh = Mesh::from_stl(stl_file)?;
+    let mesh: Mesh;
+    if config.stl_filename.ends_with("stl") {
+        let stl_file = File::open(&config.stl_filename)?;
+        mesh = Mesh::from_stl(stl_file)?;
+    } else {
+      mesh = Mesh::from_obj(&config.stl_filename)?;
+    }
+    
 
 
     // Create GL context
